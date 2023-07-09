@@ -34,6 +34,10 @@ def _provide_ctx(ctx: Context[D, T]) -> Context[D, T]:
     return ctx
 
 
+def _provide_model(ctx: Context[D, T]):
+    return ctx.model
+
+
 def _provide_scratch(
     r_stub: R, scratch: Scratch[T, R], ctx: Context[D, T]
 ) -> R:
@@ -129,6 +133,7 @@ class Injector:
                 and assumed_model_annotation is Signature.empty
             ):
                 assumed_model_annotation = hint
+                deferred[name] = _provide_model
             else:
                 raise TypeError(
                     f"Don't know how to handle type {hint}"
