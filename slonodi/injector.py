@@ -29,10 +29,6 @@ InjectableFn: TypeAlias = Callable[..., Any]
 InjectedFn: TypeAlias = Callable[[Context[D, T]], Awaitable[None]]
 
 
-_CTX_SENTINEL = object()
-_CALL_NEXT_SENTINEL = object()
-
-
 # identity
 def _provide_ctx(ctx: Context[D, T]) -> Context[D, T]:
     return ctx
@@ -49,19 +45,38 @@ def _provide_bot(ctx: Context[D, T]) -> Bot:
     return ctx.inter.bot
 
 
-def _call_handler(
-    kwds: Dict[str, Any],
-    deferred: Dict[str, MapFn[Any]],
-    f: InjectableFn,
-    context: Context[D, T],
-) -> Awaitable[None]:
-    return f(**kwds, **{k: f(context) for k, f in deferred.items()})
+class _CallHandler:
+    __slots__ = (
+        "kwds",
+        "deferred",
+        "func",
+        "__treat_as_context__",
+        "__name__",
+    )
+
+    def __init__(
+        self,
+        kwds: Dict[str, Any],
+        deferred: Dict[str, MapFn[Any]],
+        func: InjectableFn,
+    ) -> None:
+        self.kwds = kwds
+        self.deferred = deferred
+        self.func = func
+
+        self.__name__ = getattr(func, "__name__", repr(func))
+        self.__treat_as_context__ = True
+
+    def __call__(self, context: Context[D, T]) -> Awaitable[None]:
+        return self.func(
+            **self.kwds,
+            **{k: f(context) for k, f in self.deferred.items()},
+        )
 
 
 class Injector:
     def __init__(self, container: Container) -> None:
         self.container = container
-        self.__plaincontext__ = True
 
     def __call__(self, fn: InjectableFn) -> InjectedFn[D, T]:
         sig = signature(fn)
@@ -121,4 +136,4 @@ class Injector:
                     f"is the {assumed_model_annotation})"
                 )
 
-        return partial(_call_handler, eager, deferred, fn)
+        return _CallHandler(eager, deferred, fn)
