@@ -1,63 +1,43 @@
-from typing import (
-    Dict,
-    Type,
-    Any,
-    Optional,
-    Self,
-    TypeVar,
-    Callable,
-    TypeAlias,
-    NoReturn,
-)
+from __future__ import annotations
+from typing import TypeAlias, Optional, Dict, Type, Any, TypeVar, Callable
+
+from slonogram.dispatching.context import Context
 
 T = TypeVar("T")
-ConstF: TypeAlias = Callable[[], T]
-_sentinel = object()
-
-
-def const(value: T) -> Callable[[], T]:
-    def f(*args, **kwargs) -> T:
-        _ = args
-        _ = kwargs
-        return value
-
-    return f
-
-
-def throw(
-    e: Exception, from_: Optional[Exception] = None
-) -> Callable[[], NoReturn]:
-    def inner_throw() -> NoReturn:
-        if from_ is not None:
-            raise e from from_
-        raise e
-
-    return inner_throw
+MapFn: TypeAlias = Callable[[Context[Any, Any]], T]
+ValueOrMapFn: TypeAlias = T | MapFn[T]
 
 
 class Container:
-    def __init__(self) -> None:
-        self._instances: Dict[Type, Any] = {}
-        self._child: Optional[Self] = None
+    __slots__ = "parent", "_deps"
 
-    def get(
-        self,
-        ty: Type[T],
-        default: ConstF[T] = throw(
-            IndexError("failed to resolve dependency")
-        ),
-        insert_default: bool = False,
-    ) -> T:
-        result = self._instances.get(ty, _sentinel)
-        if result is _sentinel:
-            result = default()
-            if insert_default:
-                self._instances[ty] = result
-        return result
+    def __init__(self, parent: Optional[Container] = None) -> None:
+        self.parent = parent
+        self._deps: Dict[Type, Any] = {}
 
-    @property
-    def child(self) -> Optional[Self]:
-        return self._child
+    def dependency(self, ty: Type[T], dep: ValueOrMapFn[T]) -> Container:
+        new = Container(self.parent)
+        self._deps = {**self._deps, ty: dep}
+        return new
+
+    def __setitem__(self, item: Type[T], value: ValueOrMapFn[T]) -> None:
+        self._deps[item] = value
+
+    def __getitem__(self, item: Type[T]) -> ValueOrMapFn[T]:
+        try:
+            return self._deps[item]
+        except KeyError as e:
+            parent = self.parent
+            if parent is not None:
+                return parent[item]
+            raise KeyError(
+                f"failed to find type {item.__name__!r} in the container"
+            ) from e
+
+    def with_parent(self, parent: Container) -> Container:
+        new = Container(parent)
+        new._deps = self._deps
+        return new
 
 
-__all__ = ["Container", "const", "throw"]
+__all__ = ["Container"]
