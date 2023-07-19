@@ -3,6 +3,7 @@ from inspect import Parameter
 
 from .container import Container
 
+
 DeferredEvaluation: TypeAlias = Callable[[Any], Dict[str, str]]
 
 
@@ -14,7 +15,7 @@ class Specifier(Protocol):
         # thanks!
         container: Container,
         /,
-    ) -> Dict[str, Any] | DeferredEvaluation:
+    ) -> Dict[str, Any] | Tuple[Dict[str, Any], DeferredEvaluation]:
         ...
 
 

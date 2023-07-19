@@ -12,6 +12,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    cast,
 )
 from abc import ABC, abstractmethod
 
@@ -77,10 +78,12 @@ class InjectedFn(Generic[T, C]):
 
         for specifier in self._specifiers:
             res = specifier.write_dependencies(params, container)
-            if callable(res):
-                self._deferred.append(res)
+            if isinstance(res, tuple) and len(res) == 2:
+                append, eval_ = res
+                out.update(append)
+                self._deferred.append(eval_)
             else:
-                out.update(res)
+                out.update(cast(dict, res))
         self._applied_fn = partial(self._fn, **out)
 
     def __call__(self, context: C) -> T:
