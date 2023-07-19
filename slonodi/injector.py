@@ -1,144 +1,94 @@
 from __future__ import annotations
 
-from .container import Container, MapFn
-from .metadata import Dependency, FromPad
-from inspect import signature, isfunction, Signature
-
-from typing import (
-    TypeVar,
-    TypeAlias,
-    Callable,
-    Any,
-    Awaitable,
-    get_origin,
-    Annotated,
-    Dict,
-    get_args,
-)
 from functools import partial
+from inspect import signature
+from typing import (
+    Callable,
+    List,
+    Any,
+    Dict,
+    TypeVar,
+    Generic,
+    Optional,
+    Tuple,
+)
+from abc import ABC, abstractmethod
 
-from slonogram.bot import Bot
-from slonogram.handling.scratches.scratch import Scratch
-from slonogram.dispatching.context import Context
+from .container import Container
+from .specifiers import Specifier, DeferredEvaluation
 
-D = TypeVar("D")
+
 T = TypeVar("T")
-R = TypeVar("R")
-
-InjectableFn: TypeAlias = Callable[..., Any]
-InjectedFn: TypeAlias = Callable[[Context[D, T]], Awaitable[None]]
+C = TypeVar("C")
 
 
-# identity
-def _provide_ctx(ctx: Context[D, T]) -> Context[D, T]:
-    return ctx
+class Provider(Generic[C], ABC):
+    @abstractmethod
+    def provide_container(self, ctx: C) -> Container:
+        raise NotImplementedError
+
+    @abstractmethod
+    def provide_ctx(self, data: Any) -> C:
+        raise NotImplementedError
 
 
-def _provide_model(ctx: Context[D, T]):
-    return ctx.model
-
-
-def _provide_scratch(
-    r_stub: R, scratch: Scratch[T, R], ctx: Context[D, T]
-) -> R:
-    _ = r_stub
-    return ctx.pad.get(scratch)
-
-
-def _provide_bot(ctx: Context[D, T]) -> Bot:
-    return ctx.inter.bot
-
-
-class _CallHandler:
-    __slots__ = (
-        "kwds",
-        "deferred",
-        "func",
-        "__treat_as_context__",
-        "__name__",
-    )
-
+class Injector(Generic[C]):
     def __init__(
         self,
-        kwds: Dict[str, Any],
-        deferred: Dict[str, MapFn[Any]],
-        func: InjectableFn,
+        provider: Provider[C],
+        map_injected: Optional[
+            Callable[[InjectedFn[Any, C]], None]
+        ] = None,
     ) -> None:
-        self.kwds = kwds
-        self.deferred = deferred
-        self.func = func
+        self.provider = provider
+        self.map_injected = map_injected
 
-        self.__name__ = getattr(func, "__name__", repr(func))
-        self.__treat_as_context__ = True
+    def inject(
+        self, *specifiers: Specifier
+    ) -> Callable[[Callable[..., T]], InjectedFn[T, C]]:
+        def inner(fn: Callable[..., T]) -> InjectedFn[T, C]:
+            return InjectedFn[T, C](specifiers, self.provider, fn)
 
-    def __call__(self, context: Context[D, T]) -> Awaitable[None]:
-        return self.func(
-            **self.kwds,
-            **{k: f(context) for k, f in self.deferred.items()},
-        )
+        return inner
 
 
-class Injector:
-    def __init__(self, container: Container) -> None:
-        self.container = container
+class InjectedFn(Generic[T, C]):
+    def __init__(
+        self,
+        specifiers: Tuple[Specifier, ...],
+        provider: Provider[C],
+        fn: Callable[..., T],
+    ) -> None:
+        self._applied_fn: Optional[Callable[..., T]] = None
+        self._deferred: List[DeferredEvaluation] = []
+        self._specifiers = specifiers
+        self._provider = provider
+        self._fn = fn
 
-    def __call__(self, fn: InjectableFn) -> InjectedFn[D, T]:
-        sig = signature(fn)
+    def _initialize(self, context: C) -> None:
+        out: Dict[str, Any] = {}
+        params = signature(self._fn).parameters
+        container = self._provider.provide_container(context)
 
-        eager: Dict[str, Any] = {}
-        deferred: Dict[str, MapFn[Any]] = {}
-        assumed_model_annotation = Signature.empty
-
-        for name, parameter in sig.parameters.items():
-            if parameter.kind == parameter.POSITIONAL_ONLY:
-                raise TypeError(
-                    "functions with positional-only arguments"
-                    " are not supported"
-                )
-            elif parameter.annotation is Signature.empty:
-                raise TypeError(
-                    "parameters without annotations are not supported"
-                )
-            hint = parameter.annotation
-            origin = get_origin(hint)
-
-            if origin is Context:
-                deferred[name] = _provide_ctx
-            elif parameter.annotation == Bot:
-                deferred[name] = _provide_bot
-            elif origin is Annotated:
-                meta = hint.__metadata__
-                if len(meta) != 1:
-                    raise TypeError(
-                        f"unexpected type metadata size"
-                        f": {len(meta)} (expected 1)"
-                    )
-
-                (meta,) = meta  # type: ignore
-                if isinstance(meta, Dependency) or meta is Dependency:
-                    ty, *_ = get_args(hint)
-                    dep = self.container[ty]
-                    if isfunction(dep):
-                        deferred[name] = dep
-                    else:
-                        eager[name] = dep
-                elif isinstance(meta, FromPad):
-                    deferred[name] = partial(
-                        _provide_scratch, None, meta.scratch
-                    )
-                else:
-                    raise TypeError("passed unknown metadata type")
-            elif (
-                origin is None
-                and assumed_model_annotation is Signature.empty
-            ):
-                assumed_model_annotation = hint
-                deferred[name] = _provide_model
+        for specifier in self._specifiers:
+            res = specifier.write_dependencies(params, container)
+            if callable(res):
+                self._deferred.append(res)
             else:
-                raise TypeError(
-                    f"Don't know how to handle type {hint}"
-                    f" (assuming that model type "
-                    f"is the {assumed_model_annotation})"
-                )
+                out.update(res)
+        self._applied_fn = partial(self._fn, **out)
 
-        return _CallHandler(eager, deferred, fn)
+    def __call__(self, context: C) -> T:
+        applied_fn = self._applied_fn
+        if applied_fn is None:
+            self._initialize(context)
+            applied_fn = self._applied_fn
+
+        deferred: Dict[str, Any] = {}
+        for item in self._deferred:
+            deferred.update(item(context))
+
+        return applied_fn(**deferred)  # type: ignore
+
+
+__all__ = ["InjectedFn", "Injector", "Provider"]

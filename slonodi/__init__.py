@@ -1,12 +1,4 @@
 from .container import Container
-from .injector import Injector, InjectedFn, InjectableFn
-from .metadata import FromPad, Dependency
+from .injector import Injector, InjectedFn, Provider
 
-__all__ = [
-    "Container",
-    "Injector",
-    "InjectedFn",
-    "InjectableFn",
-    "FromPad",
-    "Dependency",
-]
+__all__ = ["Container", "Injector", "InjectedFn", "Provider"]

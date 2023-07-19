@@ -7,7 +7,9 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.11"
-slonogram = { git = "https://github.com/slonogram/slonogram", branch = "develop", rev = "a06964c840d44c66e434d7ca23ef37ad8be19eef" }
+
+[tool.poetry.extras]
+slonogram = ["slonogram"]
 
 [tool.black]
 line-length = 75
