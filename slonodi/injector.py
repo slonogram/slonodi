@@ -10,6 +10,7 @@ from typing import (
     TypeVar,
     Generic,
     Optional,
+    Sequence,
     Tuple,
 )
 from abc import ABC, abstractmethod
@@ -36,10 +37,12 @@ class Injector(Generic[C]):
     def __init__(
         self,
         provider: Provider[C],
+        default_specifiers: Sequence[Specifier] = [],
         map_injected: Optional[
             Callable[[InjectedFn[Any, C]], None]
         ] = None,
     ) -> None:
+        self.default_specifiers = default_specifiers
         self.provider = provider
         self.map_injected = map_injected
 
@@ -47,7 +50,9 @@ class Injector(Generic[C]):
         self, *specifiers: Specifier
     ) -> Callable[[Callable[..., T]], InjectedFn[T, C]]:
         def inner(fn: Callable[..., T]) -> InjectedFn[T, C]:
-            return InjectedFn[T, C](specifiers, self.provider, fn)
+            return InjectedFn[T, C](
+                (*self.default_specifiers, *specifiers), self.provider, fn
+            )
 
         return inner
 
